@@ -40,7 +40,10 @@ finish_line = pygame.Rect(WIDTH - 50, 0, 50, HEIGHT)
 
 # Fonts
 font = pygame.font.Font(None, 74)
+lap_font = pygame.font.Font(None, 36)
 
+# Number of laps
+NUM_LAPS = 3
 
 def draw_objects():
     screen.fill(BLACK)
@@ -59,13 +62,11 @@ def draw_objects():
     pygame.draw.rect(screen, BLUE, bot2)
     pygame.draw.rect(screen, YELLOW, bot3)
 
-
 def update_position(entity, angle, lane_index):
     lane_radius = TRACK_RADIUS + lane_index * LANE_WIDTH
     x = TRACK_CENTER[0] + lane_radius * math.cos(angle)
     y = TRACK_CENTER[1] + lane_radius * math.sin(angle)
     entity.center = (x, y)
-
 
 def display_winner(winner):
     text = font.render(f'{winner} wins!', True, WHITE)
@@ -73,6 +74,25 @@ def display_winner(winner):
     pygame.display.flip()
     pygame.time.wait(3000)
 
+def handle_player_input(player_lane_index, last_switch_time):
+    current_time = pygame.time.get_ticks()
+    if current_time - last_switch_time < 200:  # 200ms delay between switches
+        return player_lane_index, False, last_switch_time
+
+    keys = pygame.key.get_pressed()
+    new_lane_index = player_lane_index
+    lane_changed = False
+    if keys[pygame.K_a]:
+        new_lane_index = max(0, player_lane_index - 1)
+        lane_changed = new_lane_index != player_lane_index
+    if keys[pygame.K_d]:
+        new_lane_index = min(NUM_LANES - 1, player_lane_index + 1)
+        lane_changed = new_lane_index != player_lane_index
+
+    if lane_changed:
+        last_switch_time = current_time
+
+    return new_lane_index, lane_changed, last_switch_time
 
 def main():
     clock = pygame.time.Clock()
@@ -91,6 +111,11 @@ def main():
     player_speed = PLAYER_SPEED
     bot_speed = BOT_SPEED
 
+    player_lap_count = 0
+    bot1_lap_count = 0
+    bot2_lap_count = 0
+    bot3_lap_count = 0
+
     # Initial positions
     update_position(player, player_angle, player_lane_index)
     update_position(bot1, bot1_angle, bot1_lane_index)
@@ -100,6 +125,7 @@ def main():
     bot1_switch_timer = pygame.time.get_ticks()
     bot2_switch_timer = pygame.time.get_ticks()
     bot3_switch_timer = pygame.time.get_ticks()
+    last_switch_time = 0
 
     while True:
         for event in pygame.event.get():
@@ -126,18 +152,15 @@ def main():
             else:
                 countdown_text = font.render(str(countdown_seconds - int(elapsed_time)), True, WHITE)
                 screen.fill(BLACK)
-                screen.blit(countdown_text, (
-                WIDTH // 2 - countdown_text.get_width() // 2, HEIGHT // 2 - countdown_text.get_height() // 2))
+                screen.blit(countdown_text, (WIDTH // 2 - countdown_text.get_width() // 2, HEIGHT // 2 - countdown_text.get_height() // 2))
                 pygame.display.flip()
 
         elif game_state == 'RACING':
-            keys = pygame.key.get_pressed()
-
-            # Player controls (A, D)
-            if keys[pygame.K_a]:
-                player_lane_index = max(0, player_lane_index - 1)
-            if keys[pygame.K_d]:
-                player_lane_index = min(NUM_LANES - 1, player_lane_index + 1)
+            # Handle player lane switching
+            new_player_lane_index, lane_changed, last_switch_time = handle_player_input(player_lane_index, last_switch_time)
+            if lane_changed:
+                player_lane_index = new_player_lane_index
+                update_position(player, player_angle, player_lane_index)
 
             # Update bot positions and switch lanes
             current_time = pygame.time.get_ticks()
@@ -165,63 +188,63 @@ def main():
             update_position(bot2, bot2_angle, bot2_lane_index)
             update_position(bot3, bot3_angle, bot3_lane_index)
 
-            # Debugging output
-            print(f"Player lane: {player_lane_index}, Angle: {player_angle}")
-            print(f"Bot1 lane: {bot1_lane_index}, Angle: {bot1_angle}")
-            print(f"Bot2 lane: {bot2_lane_index}, Angle: {bot2_angle}")
-            print(f"Bot3 lane: {bot3_lane_index}, Angle: {bot3_angle}")
-
-            # Check for winners
+            # Check for lap completion and winners
             if player.right >= finish_line.left:
-                display_winner('Player')
-                game_state = 'MENU'
+                player_lap_count += 1
+                if player_lap_count >= NUM_LAPS:
+                    display_winner('Player')
+                    game_state = 'MENU'
+                    player_lap_count = 0
+                    bot1_lap_count = 0
+                    bot2_lap_count = 0
+                    bot3_lap_count = 0
                 player_angle = -math.pi / 2
+            if bot1.right >= finish_line.left:
+                bot1_lap_count += 1
+                if bot1_lap_count >= NUM_LAPS:
+                    display_winner('Bot 1')
+                    game_state = 'MENU'
+                    player_lap_count = 0
+                    bot1_lap_count = 0
+                    bot2_lap_count = 0
+                    bot3_lap_count = 0
                 bot1_angle = -math.pi / 2
+            if bot2.right >= finish_line.left:
+                bot2_lap_count += 1
+                if bot2_lap_count >= NUM_LAPS:
+                    display_winner('Bot 2')
+                    game_state = 'MENU'
+                    player_lap_count = 0
+                    bot1_lap_count = 0
+                    bot2_lap_count = 0
+                    bot3_lap_count = 0
                 bot2_angle = -math.pi / 2
+            if bot3.right >= finish_line.left:
+                bot3_lap_count += 1
+                if bot3_lap_count >= NUM_LAPS:
+                    display_winner('Bot 3')
+                    game_state = 'MENU'
+                    player_lap_count = 0
+                    bot1_lap_count = 0
+                    bot2_lap_count = 0
+                    bot3_lap_count = 0
                 bot3_angle = -math.pi / 2
-                player_lane_index = 1
-                bot1_lane_index = 0
-                bot2_lane_index = 2
-                bot3_lane_index = 3
-            elif bot1.right >= finish_line.left:
-                display_winner('Bot 1')
-                game_state = 'MENU'
-                player_angle = -math.pi / 2
-                bot1_angle = -math.pi / 2
-                bot2_angle = -math.pi / 2
-                bot3_angle = -math.pi / 2
-                player_lane_index = 1
-                bot1_lane_index = 0
-                bot2_lane_index = 2
-                bot3_lane_index = 3
-            elif bot2.right >= finish_line.left:
-                display_winner('Bot 2')
-                game_state = 'MENU'
-                player_angle = -math.pi / 2
-                bot1_angle = -math.pi / 2
-                bot2_angle = -math.pi / 2
-                bot3_angle = -math.pi / 2
-                player_lane_index = 1
-                bot1_lane_index = 0
-                bot2_lane_index = 2
-                bot3_lane_index = 3
-            elif bot3.right >= finish_line.left:
-                display_winner('Bot 3')
-                game_state = 'MENU'
-                player_angle = -math.pi / 2
-                bot1_angle = -math.pi / 2
-                bot2_angle = -math.pi / 2
-                bot3_angle = -math.pi / 2
-                player_lane_index = 1
-                bot1_lane_index = 0
-                bot2_lane_index = 2
-                bot3_lane_index = 3
 
             draw_objects()
+
+            # Display lap counts
+            player_lap_text = lap_font.render(f'Player Laps: {player_lap_count}/{NUM_LAPS}', True, RED)
+            bot1_lap_text = lap_font.render(f'Bot 1 Laps: {bot1_lap_count}/{NUM_LAPS}', True, GREEN)
+            bot2_lap_text = lap_font.render(f'Bot 2 Laps: {bot2_lap_count}/{NUM_LAPS}', True, BLUE)
+            bot3_lap_text = lap_font.render(f'Bot 3 Laps: {bot3_lap_count}/{NUM_LAPS}', True, YELLOW)
+            screen.blit(player_lap_text, (10, 10))
+            screen.blit(bot1_lap_text, (10, 50))
+            screen.blit(bot2_lap_text, (10, 90))
+            screen.blit(bot3_lap_text, (10, 130))
+
             pygame.display.flip()
 
         clock.tick(60)
-
 
 if __name__ == '__main__':
     main()
