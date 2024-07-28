@@ -1,4 +1,4 @@
-import pygame, math, sys, time, end, main
+import pygame, math, sys, time, main
 from pygame.locals import *
 
 
