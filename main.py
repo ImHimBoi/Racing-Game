@@ -2,7 +2,49 @@ import pygame
 import math
 import sys
 import time
+import random
+import json
+import subprocess
+import os
 from pygame.locals import *
+
+carsCollectionId = "3339"  # Replace with actual collection ID
+tokenId = "1"  # Replace with actual token ID
+nickname = "AkiVenkat"  # Replace with actual nickname
+# Read and write functions for personal best time
+def read_personal_best(filename):
+    try:
+        with open(filename, 'r') as file:
+            return float(file.read().strip())
+    except FileNotFoundError:
+        return float('inf')
+    except ValueError:
+        return float('inf')
+
+def write_personal_best(filename, time):
+    with open(filename, 'w') as file:
+        file.write(str(time))
+
+# Functions to read and write player stats to a JSON file
+def read_stats(filename):
+    try:
+        with open(filename, 'r') as file:
+            data = json.load(file)
+            return data.get('Victories', 0), data.get('Defeats', 0), data.get('Total time played', 0.0), data.get('Best lap time', 0.0)
+    except FileNotFoundError:
+        return 0, 0, 0.0, 0.0
+    except ValueError:
+        return 0, 0, 0.0, 0.0
+
+def write_stats(filename, victories, defeats, total_time_played, best_lap_time):
+    data = {
+        'Victories': victories,
+        'Defeats': defeats,
+        'Total time played': total_time_played,
+        'Best lap time': best_lap_time
+    }
+    with open(filename, 'w') as file:
+        json.dump(data, file, indent=2)
 
 def level1():
     pygame.init()
@@ -12,10 +54,18 @@ def level1():
     font = pygame.font.Font(None, 75)
     win_font = pygame.font.Font(None, 50)
     small_font = pygame.font.Font(None, 36)
-    win_condition = None
+    countdown_time = 80  # 80 seconds countdown
+    car_crashed = False
+    lap_completed = False
     win_text = font.render('', True, (0, 255, 0))
     loss_text = font.render('', True, (255, 0, 0))
-    t0 = time.time()
+    fail_text = font.render('', True, (255, 0, 0))
+    personal_best_file = 'personal_best.txt'
+    stats_file = 'stats.json'
+
+    # Read the personal best time and stats from the files
+    personal_best_time = read_personal_best(personal_best_file)
+    victories, defeats, total_time_played, best_lap_time = read_stats(stats_file)
 
     class CarSprite(pygame.sprite.Sprite):
         MAX_FORWARD_SPEED = 10
@@ -30,7 +80,7 @@ def level1():
             self.speed = 0
             self.direction = 0
             self.k_left = self.k_right = self.k_down = self.k_up = 0
-        
+
         def update(self, deltat):
             self.speed += (self.k_up + self.k_down)
             if self.speed > self.MAX_FORWARD_SPEED:
@@ -47,69 +97,138 @@ def level1():
             self.rect = self.image.get_rect()
             self.rect.center = self.position
 
-    class AICarSprite(CarSprite):
-        def __init__(self, image, position, waypoints):
-            super().__init__(image, position)
-            self.waypoints = waypoints
-            self.current_waypoint = 0
-            self.target_speed = self.MAX_FORWARD_SPEED * 0.75
-            self.safe_distance = 150  # Increased safe distance
-            self.rect = self.src_image.get_rect(center=position)
-            self.exploded = False
+    class ObstacleSprite(pygame.sprite.Sprite):
+        def __init__(self, image, position):
+            pygame.sprite.Sprite.__init__(self)
+            self.src_image = pygame.image.load(image)
+            self.image = self.src_image
+            self.rect = self.image.get_rect()
+            self.rect.center = position
+            # Make the hitbox even smaller
+            hitbox_size = 10  # Reduce this value to make the hitbox smaller
+            self.hitbox = pygame.Rect(self.rect.centerx - hitbox_size // 2, 
+                                      self.rect.centery - hitbox_size // 2, 
+                                      hitbox_size, hitbox_size)
 
-        def update(self, deltat, player_car, center, inner_a, inner_b, outer_a, outer_b):
-            if self.exploded:
-                return
+        def update(self):
+            # Sync hitbox with image position
+            self.hitbox.center = self.rect.center
 
-            if self.current_waypoint < len(self.waypoints):
-                target_x, target_y = self.waypoints[self.current_waypoint]
-                dx = target_x - self.position[0]
-                dy = target_y - self.position[1]
-                distance = math.hypot(dx, dy)
+    center = (2000, 1000)
+    inner_a, inner_b = 1600, 800
+    outer_a, outer_b = 2200, 1100
 
-                if distance < 50:
-                    self.current_waypoint = (self.current_waypoint + 1) % len(self.waypoints)
-                else:
-                    angle_to_target = math.degrees(math.atan2(-dy, dx))
-                    angle_diff = (angle_to_target - self.direction + 180) % 360 - 180
+    car_start_pos = (center[0] , center[1] - (inner_b + outer_b) / 2 + 10)
+    car = CarSprite('Racing-Game/images/car.png', car_start_pos)
+    car.direction = -90
+    car_group = pygame.sprite.RenderPlain(car)
 
-                # Adjust steering based on track boundaries
-                    cx, cy = center
-                    x, y = self.position
-                    distance_to_center = math.hypot(x - cx, y - cy)
-                    angle_to_center = math.degrees(math.atan2(cy - y, cx - x))
+    # Generate a dense population of obstacles
+    obstacles = pygame.sprite.Group()
+    num_obstacles = 100  # Increased number of obstacles for more density
+    for _ in range(num_obstacles):
+        angle = random.uniform(0, 2 * math.pi)
+        radius_a = random.uniform(inner_a, outer_a)  # Randomize horizontal distance
+        radius_b = random.uniform(inner_b, outer_b)  # Randomize vertical distance
+        x = center[0] + radius_a * math.cos(angle)
+        y = center[1] + radius_b * math.sin(angle)
+        obstacle = ObstacleSprite('Racing-Game/images/LittleBoy (2).png', (x, y))
+        obstacles.add(obstacle)
 
-                    if distance_to_center > (outer_a + outer_b) / 2 - self.safe_distance:
-                        angle_diff = (angle_to_center - self.direction + 180) % 360 - 180
-                    elif distance_to_center < (inner_a + inner_b) / 2 + self.safe_distance:
-                        angle_diff = (angle_to_center + 180 - self.direction + 180) % 360 - 180
+    lap_start = False
+    start_angle = math.pi / 2
+    current_angle = start_angle
+    last_angle = start_angle
+    clockwise = False
+    has_moved_sufficiently = False  # Add a flag to check if the car has moved a sufficient distance
 
-                    if abs(angle_diff) > 10:
-                        self.k_right = -1 if angle_diff > 0 else 0
-                        self.k_left = 1 if angle_diff < 0 else 0
-                    else:
-                        self.k_right = 0
-                        self.k_left = 0
+    def draw_oval(surface, color, rect, width=0):
+        pygame.draw.ellipse(surface, color, rect, width)
 
-                    turn_sharpness = abs(angle_diff) / 180
-                    self.target_speed = self.MAX_FORWARD_SPEED * (1 - turn_sharpness * 0.7)
+    def point_inside_ellipse(x, y, cx, cy, a, b):
+        return ((x - cx) ** 2 / a ** 2 + (y - cy) ** 2 / b ** 2) <= 1
 
-                    self.k_up = 1 if self.speed < self.target_speed else 0
-                    self.k_down = 1 if self.speed > self.target_speed else 0
+    start_time = time.time()  # Initialize the start time
 
-                # Collision avoidance with player car
-                player_x, player_y = player_car.position
-                if math.hypot(player_x - self.position[0], player_y - self.position[1]) < 200:  # Increased avoidance distance
-                    avoid_angle = math.degrees(math.atan2(self.position[1] - player_y, self.position[0] - player_x))
-                    angle_diff = (avoid_angle - self.direction + 180) % 360 - 180
-                    self.k_right = -1 if angle_diff > 0 else 0
-                    self.k_left = 1 if angle_diff < 0 else 0
-                    self.target_speed = self.MAX_FORWARD_SPEED * 0.5
+    while True:
+        deltat = clock.tick(30)
 
-            # Check if AI car is off the road
-            x, y = self.position
+        for event in pygame.event.get():
+            if not hasattr(event, 'key'): continue
+            down = event.type == KEYDOWN
+            if not car_crashed:
+                if event.key == K_RIGHT:
+                    car.k_right = down * -5
+                elif event.key == K_LEFT:
+                    car.k_left = down * 5
+                elif event.key == K_UP:
+                    car.k_up = down * 2
+                elif event.key == K_DOWN:
+                    car.k_down = down * -2
+                elif event.key == K_ESCAPE:
+                    sys.exit(0)
+
+            elif car_crashed and event.key == K_SPACE:
+                level1()
+                return  # Exit current loop to restart the level
+            elif event.key == K_ESCAPE:
+                print("node", "./src/4-play.js", carsCollectionId, tokenId, nickname)
+                result = subprocess.run(["node", "./src/4-play.js", carsCollectionId, tokenId, nickname], capture_output=True, text=True)
+                print(result.stdout)
+        
+                sys.exit(0)
+
+        # Countdown timer
+        remaining_time = countdown_time - (time.time() - start_time)
+        if remaining_time <= 0 and not car_crashed and not lap_completed:
+            car_crashed = True
+            fail_text = win_font.render('You failed, try again!', True, (255, 0, 0))
+            defeats += 1  # Increment defeat count
+            total_time_played += countdown_time
+            write_stats(stats_file, victories, defeats, total_time_played, best_lap_time)
+
+            # Show green screen with failure message
+            screen.fill((0, 255, 0))
+            screen.blit(fail_text, (WIDTH // 2 - fail_text.get_width() // 2, HEIGHT // 2 - fail_text.get_height() // 2))
+            pygame.display.flip()
+        
+            # Wait for space key press
+            waiting = True
+            while waiting:
+                for event in pygame.event.get():
+                    if event.type == KEYDOWN and event.key == K_SPACE:
+                        waiting = False
+                    elif event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
+                        print("node", "./src/4-play.js", carsCollectionId, tokenId, nickname)
+                        result = subprocess.run(["node", "./src/4-play.js", carsCollectionId, tokenId, nickname], capture_output=True, text=True)
+                        print(result.stdout)
+    
+                        pygame.quit()
+                        sys.exit()
+
+            level1()
+            return
+
+        if car_crashed:
+            screen.blit(loss_text, (250, 700))
+            # Display personal best time
+            personal_best_text = small_font.render(f'Personal Best: {int(personal_best_time // 60):02}:{int(personal_best_time % 60):02}', True, (255, 255, 255))
+            screen.blit(personal_best_text, (20, 160))
+        else:
+            # Stopwatch
+            stopwatch_time = countdown_time - remaining_time
+            stopwatch_text = font.render(f'Time: {int(remaining_time // 60):02}:{int(remaining_time % 60):02}', True, (255, 255, 0))
+
+            screen.fill((0, 100, 0))
+            car_group.update(deltat)
+
+            # Update obstacle hitboxes
+            for obstacle in obstacles:
+                obstacle.update()
+
+            x, y = car.position
             cx, cy = center
-            car_width, car_height = self.rect.size
+            car_width, car_height = car.rect.size
 
             corners = [
                 (x - car_width / 2, y - car_height / 2),
@@ -124,185 +243,134 @@ def level1():
                 for corner in corners
             )
 
-            if not on_track:
-                self.image = pygame.image.load('images/collision.png')
-                self.rect = self.image.get_rect(center=self.position)
-                self.MAX_FORWARD_SPEED = 0
-                self.MAX_REVERSE_SPEED = 0
-                self.k_right = 0
-                self.k_left = 0
-                self.exploded = True  # Set exploded flag to True
+            # Check for collisions with smaller hitboxes
+            if not on_track or any(obstacle.hitbox.colliderect(car.rect) for obstacle in obstacles):
+                if not car_crashed:  # Crash only once
+                    car_crashed = True
+                    car.image = pygame.image.load('Racing-Game/images/collision.png')
+                    car.MAX_FORWARD_SPEED = 0
+                    car.MAX_REVERSE_SPEED = 0
+                    car.k_right = 0
+                    car.k_left = 0
+                    loss_text = win_font.render('Press Space to Restart', True, (255, 0, 0))
+                    defeats += 1  # Increment defeat count
+                    # Record total playing time
+                    total_time_played += stopwatch_time
+                    write_stats(stats_file, victories, defeats, total_time_played, best_lap_time)
+                    
+                    # Render explosion
+                    screen.blit(car.image, (WIDTH // 2 - car.image.get_width() // 2, HEIGHT // 2 - car.image.get_height() // 2))
+                    pygame.display.flip()
+                    time.sleep(1)  # Show explosion for 1 second
+
+                    # Show green screen with message
+                    screen.fill((0, 255, 0))
+                    screen.blit(loss_text, (WIDTH // 2 - loss_text.get_width() // 2, HEIGHT // 2 - loss_text.get_height() // 2))
+                    pygame.display.flip()
+                    
+                    # Wait for space key press
+                    waiting = True
+                    while waiting:
+                        for event in pygame.event.get():
+                            if event.type == KEYDOWN and event.key == K_SPACE:
+                                waiting = False
+                            elif event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
+                                print("node", "./src/4-play.js", carsCollectionId, tokenId, nickname)
+                                result = subprocess.run(["node", "./src/4-play.js", carsCollectionId, tokenId, nickname], capture_output=True, text=True)
+                                print(result.stdout)
+                            
+                                pygame.quit()
+                                sys.exit()
+
+                    level1()
+                    return
+
+            # Calculate and display race completion
+            last_angle = current_angle
+            current_angle = math.atan2(center[1] - y, x - center[0])
+            if current_angle < 0:
+                current_angle += 2 * math.pi
+
+            angle_diff = (current_angle - last_angle + math.pi) % (2 * math.pi) - math.pi
+            if angle_diff > 0:
+                clockwise = True
+            elif angle_diff < 0:
+                clockwise = False
+
+            if not lap_start and car.speed != 0:
+                lap_start = True
+                has_moved_sufficiently = True  # The car has moved a sufficient distance
+
+            if lap_start and has_moved_sufficiently and car.speed != 0:
+                lap_start = True
+
+            if lap_start and current_angle < start_angle and last_angle > start_angle and not clockwise:
+                lap_completed = True
+                lap_start = False
+
+                # Record win and total playing time
+                victories += 1
+                total_time_played += stopwatch_time
+                write_stats(stats_file, victories, defeats, total_time_played, best_lap_time)
+
+                # Check and update personal best time
+                if stopwatch_time < personal_best_time:
+                    write_personal_best(personal_best_file, stopwatch_time)
+                    personal_best_time = stopwatch_time
+
+                # Display win message on green screen
+                screen.fill((0, 255, 0))
+                win_text = win_font.render(f'New Record! Time: {int(stopwatch_time // 60):02}:{int(stopwatch_time % 60):02}', True, (0, 0, 255))
+                screen.blit(win_text, (WIDTH // 2 - win_text.get_width() // 2, HEIGHT // 2 - win_text.get_height() // 2))
+                pygame.display.flip()
+
+                # Wait for 3 seconds or space key press
+                start_wait = time.time()
+                waiting = True
+                while waiting and time.time() - start_wait < 3:
+                    for event in pygame.event.get():
+                        if event.type == KEYDOWN and event.key == K_SPACE:
+                            waiting = False
+                        elif event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
+                            print("node", "./src/4-play.js", carsCollectionId, tokenId, nickname)
+                            result = subprocess.run(["node", "./src/4-play.js", carsCollectionId, tokenId, nickname], capture_output=True, text=True)
+                            print(result.stdout)
+                            pygame.quit()
+                            sys.exit()
+
+                level1()
                 return
 
-            super().update(deltat)
-            self.rect = self.image.get_rect()
-            self.rect.center = self.position
+            completion_text = small_font.render(f'Laps Completed: {int(lap_completed)}', True, (255, 255, 255))
 
+            offset_x = WIDTH // 2 - car.position[0]
+            offset_y = HEIGHT // 2 - car.position[1]
 
-    def generate_waypoints(center, inner_a, inner_b, outer_a, outer_b, num_points=100):
-        waypoints = []
-        for i in range(num_points):
-            angle = 2 * math.pi * i / num_points
-            # Generate waypoints closer to the middle of the track
-            x = center[0] + (inner_a * 1.2 + outer_a * 0.8) / 2 * math.cos(angle)
-            y = center[1] + (inner_b * 1.2 + outer_b * 0.8) / 2 * math.sin(angle)
-            waypoints.append((x, y))
-        return waypoints
+            outer_rect = pygame.Rect(center[0] - outer_a + offset_x, center[1] - outer_b + offset_y, 2 * outer_a, 2 * outer_b)
+            inner_rect = pygame.Rect(center[0] - inner_a + offset_x, center[1] - inner_b + offset_y, 2 * inner_a, 2 * inner_b)
+            draw_oval(screen, (128, 128, 128), outer_rect)
+            draw_oval(screen, (0, 100, 0), inner_rect)
 
-    center = (2000, 1000)
-    inner_a, inner_b = 1600, 800
-    outer_a, outer_b = 2200, 1100
+            draw_oval(screen, (255, 255, 255), outer_rect, 2)
+            draw_oval(screen, (255, 255, 255), inner_rect, 2)
 
-    car_start_pos = (center[0] - 20, center[1] - (inner_b + outer_b) / 2 + 10)
-    car = CarSprite('images/car.png', car_start_pos)
-    car.direction = -90
-    car_group = pygame.sprite.RenderPlain(car)
+            start_pos = (center[0] + offset_x, center[1] - outer_b + offset_y)
+            end_pos = (center[0] + offset_x, center[1] - inner_b + offset_y)
+            pygame.draw.line(screen, (255, 0, 0), start_pos, end_pos, 5)
 
-    waypoints = generate_waypoints(center, inner_a, inner_b, outer_a, outer_b, num_points=100)
+            screen.blit(car.image, (WIDTH // 2 - car.image.get_width() // 2, HEIGHT // 2 - car.image.get_height() // 2))
 
-    ai_car_start_pos = (center[0] + 20, center[1] - (inner_b + outer_b) / 2 + 10)
-    ai_car = AICarSprite('images/ai_car.png', ai_car_start_pos, waypoints)
-    ai_car.direction = -90
-    ai_car_group = pygame.sprite.RenderPlain(ai_car)
+            # Draw obstacles
+            for obstacle in obstacles:
+                screen.blit(obstacle.image, (obstacle.rect.x + offset_x, obstacle.rect.y + offset_y))
 
-    lap_start = False
-    lap_complete = False
-    start_angle = math.pi / 2
-    current_angle = start_angle
-    last_angle = start_angle
-    clockwise = False
+            screen.blit(stopwatch_text, (20, 60))
+            screen.blit(completion_text, (20, 120))
 
-    def draw_oval(surface, color, rect, width=0):
-        pygame.draw.ellipse(surface, color, rect, width)
-
-    def point_inside_ellipse(x, y, cx, cy, a, b):
-        return ((x - cx)**2 / a**2 + (y - cy)**2 / b**2) <= 1
-
-    while 1:
-        t1 = time.time()
-        dt = t1 - t0
-        deltat = clock.tick(30)
-
-        for event in pygame.event.get():
-            if not hasattr(event, 'key'): continue
-            down = event.type == KEYDOWN 
-            if win_condition == None: 
-                if event.key == K_RIGHT: car.k_right = down * -5 
-                elif event.key == K_LEFT: car.k_left = down * 5
-                elif event.key == K_UP: car.k_up = down * 2
-                elif event.key == K_DOWN: car.k_down = down * -2 
-                elif event.key == K_ESCAPE: sys.exit(0)
-            elif (win_condition == True or win_condition == False) and event.key == K_SPACE:
-                level1()
-                t0 = t1
-            elif event.key == K_ESCAPE: sys.exit(0)    
-    
-        seconds = round((60 - dt), 2)
-        if win_condition == None:
-            timer_text = font.render(str(seconds), True, (255, 255, 0))
-            if seconds <= 0:
-                win_condition = False
-                timer_text = font.render("Time!", True, (255, 0, 0))
-                loss_text = win_font.render('Press Space to Retry', True, (255, 0, 0))
-        
-        screen.fill((0, 100, 0))
-        car_group.update(deltat)
-        ai_car_group.update(deltat, car, center, inner_a, inner_b, outer_a, outer_b)
-
-        x, y = car.position
-        cx, cy = center
-        car_width, car_height = car.rect.size
-
-        corners = [
-            (x - car_width / 2, y - car_height / 2),
-            (x + car_width / 2, y - car_height / 2),
-            (x - car_width / 2, y + car_height / 2),
-            (x + car_width / 2, y + car_height / 2)
-        ]
-
-        on_track = all(
-            point_inside_ellipse(corner[0], corner[1], cx, cy, outer_a, outer_b) and
-            not point_inside_ellipse(corner[0], corner[1], cx, cy, inner_a, inner_b)
-            for corner in corners
-        )
-
-        if not on_track:
-            win_condition = False
-            timer_text = font.render("Crash!", True, (255, 0, 0))
-            car.image = pygame.image.load('images/collision.png')
-            loss_text = win_font.render('Press Space to Retry', True, (255, 0, 0))
-            car.MAX_FORWARD_SPEED = 0
-            car.MAX_REVERSE_SPEED = 0
-            car.k_right = 0
-            car.k_left = 0
-
-        last_angle = current_angle
-        current_angle = math.atan2(center[1] - y, x - center[0])
-        if current_angle < 0:
-            current_angle += 2 * math.pi
-
-        angle_diff = (current_angle - last_angle + math.pi) % (2 * math.pi) - math.pi
-        if angle_diff > 0:
-            clockwise = True
-        elif angle_diff < 0:
-            clockwise = False
-
-        if not lap_start and car.speed != 0:
-            lap_start = True
-
-        if lap_start and current_angle < start_angle and last_angle > start_angle and not clockwise and race_completion > 95:
-            lap_complete = True
-
-        if lap_complete:
-            win_condition = True
-            timer_text = font.render("Lap Complete!", True, (0, 255, 0))
-            win_text = win_font.render('Press Space to Restart', True, (0, 255, 0))
-
-        if clockwise:
-            race_completion = 0
-        else:
-            race_completion = ((start_angle - current_angle) % (2 * math.pi)) / (2 * math.pi) * 100
-        completion_text = small_font.render(f'Race Completion: {race_completion:.1f}%', True, (255, 255, 255))
-
-        offset_x = WIDTH // 2 - car.position[0]
-        offset_y = HEIGHT // 2 - car.position[1]
-
-        outer_rect = pygame.Rect(center[0] - outer_a + offset_x, center[1] - outer_b + offset_y, 2 * outer_a, 2 * outer_b)
-        inner_rect = pygame.Rect(center[0] - inner_a + offset_x, center[1] - inner_b + offset_y, 2 * inner_a, 2 * inner_b)
-        draw_oval(screen, (128, 128, 128), outer_rect)
-        draw_oval(screen, (0, 100, 0), inner_rect)
-
-        draw_oval(screen, (255, 255, 255), outer_rect, 2)
-        draw_oval(screen, (255, 255, 255), inner_rect, 2)
-
-        start_pos = (center[0] + offset_x, center[1] - outer_b + offset_y)
-        end_pos = (center[0] + offset_x, center[1] - inner_b + offset_y)
-        pygame.draw.line(screen, (255, 0, 0), start_pos, end_pos, 5)
-
-        screen.blit(car.image, (WIDTH // 2 - car.image.get_width() // 2, HEIGHT // 2 - car.image.get_height() // 2))
-        screen.blit(ai_car.image, (ai_car.rect.x + offset_x, ai_car.rect.y + offset_y))
-
-        screen.blit(timer_text, (20, 60))
-        screen.blit(win_text, (250, 700))
-        screen.blit(loss_text, (250, 700))
-        screen.blit(completion_text, (20, 120))
-
-        if pygame.sprite.collide_rect(car, ai_car):
-            win_condition = False
-            timer_text = font.render("Collision!", True, (255, 0, 0))
-            car.image = pygame.image.load('images/collision.png')
-            ai_car.image = pygame.image.load('images/collision.png')
-            loss_text = win_font.render('Press Space to Retry', True, (255, 0, 0))
-            car.MAX_FORWARD_SPEED = 0
-            car.MAX_REVERSE_SPEED = 0
-            ai_car.MAX_FORWARD_SPEED = 0
-            ai_car.MAX_REVERSE_SPEED = 0
-            car.k_right = 0
-            car.k_left = 0
-            ai_car.k_right = 0
-            ai_car.k_left = 0
-        
         pygame.display.flip()
 
 if __name__ == "__main__":
     level1()
+    # Call the Node.js script with necessary arguments
+    subprocess.run(["node", "./src/4-play.js", carsCollectionId, tokenId, nickname])
+    os.system(f"node ./src/4-play.js {carsCollectionId} {tokenId} {nickname}")
